@@ -1,4 +1,7 @@
 /**
+*    Based off of Forwarding.java - attempt to modify it to
+*    implement "pushback algorithm".
+*
 *    Copyright 2011, Big Switch Networks, Inc. 
 *    Originally created by David Erickson, Stanford University
 * 
@@ -63,13 +66,8 @@ import org.slf4j.LoggerFactory;
 @LogMessageCategory("Flow Programming")
 public class PushbackForwarding extends ForwardingBase implements IFloodlightModule {
     protected static Logger log = LoggerFactory.getLogger(PushbackForwarding.class);
-    
-    protected static Map<Long, Integer> numHits = new HashMap<Long, Integer>();
-    protected static Map<Long, Long> rateLimited = new HashMap<Long, Long>(); // first is switch id, second is time it was added in milliseconds
-    protected static long RATE_LIMIT_TIMEOUT = 60*1000;
-    // for practical use would be better to just have it switch state based off of switch traffic
-    // write functions outside of this for switch state tracking/getting/setting
-    // modular architecture - then those can be replaced
+
+    protected static ISwitchStatus switchStatus;
 
     @Override
     @LogMessageDoc(level="ERROR",
@@ -79,32 +77,12 @@ public class PushbackForwarding extends ForwardingBase implements IFloodlightMod
                    recommendation=LogMessageDoc.REPORT_CONTROLLER_BUG)
     public Command processPacketInMessage(IOFSwitch sw, OFPacketIn pi, IRoutingDecision decision, FloodlightContext cntx) {
         
-        long swId = sw.getId();
-        
-        if (rateLimited.containsKey(swId)) {
-            long timeSet = rateLimited.get(swId);
-            if ((System.currentTimeMillis() - timeSet) > RATE_LIMIT_TIMEOUT) {
-                log.info("Removing switch " + swId + " from rate limited set");
-                rateLimited.remove(swId);
-                numHits.remove(swId);
-            }
-        }
-        else {
-            int hits = 0;
-            if (numHits.containsKey(swId))
-                hits = numHits.get(swId);
-            hits++;
-            numHits.put(swId, hits);
-        
-            if (hits > 20) {
-                log.info("Rate limiting switch " + swId);
-                rateLimited.put(swId, System.currentTimeMillis());
-            }
-        }
-        
-        if (rateLimited.containsKey(swId))
+        if (switchStatus.getSwitchStatus(sw.getId())) {
+            log.info("Switch is rate limited! Do not continue");
             return Command.CONTINUE;
-        
+        }
+        else
+            log.info("Switch status good! Continue on!");
         
         Ethernet eth = IFloodlightProviderService.bcStore.get(cntx, 
                                    IFloodlightProviderService.CONTEXT_PI_PAYLOAD);
@@ -454,6 +432,8 @@ public class PushbackForwarding extends ForwardingBase implements IFloodlightMod
         this.routingEngine = context.getServiceImpl(IRoutingService.class);
         this.topology = context.getServiceImpl(ITopologyService.class);
         this.counterStore = context.getServiceImpl(ICounterStoreService.class);
+        
+        switchStatus = new SwitchStatusHit();
         
         // read our config options
         Map<String, String> configOptions = context.getConfigParams(this);
